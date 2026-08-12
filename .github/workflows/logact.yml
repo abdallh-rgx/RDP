@@ -1,4 +1,4 @@
-name: Logcat
+name: Android Logcat Collector (Tailscale)
 
 on:
   workflow_dispatch:
@@ -17,9 +17,7 @@ jobs:
       - name: Connect to Tailscale
         uses: tailscale/github-action@v2
         with:
-          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
-          tags: tag:ci
+          authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
 
       - name: Install ADB Tools
         run: |
@@ -64,7 +62,7 @@ jobs:
       - name: Pull Logcat File from Phone
         run: |
           PHONE_IP="100.115.73.81"
-          PHONE_PORT="5555"
+          PHONE_PORT="43207"
           
           adb connect $PHONE_IP:$PHONE_PORT || true
 
