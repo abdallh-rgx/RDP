@@ -24,35 +24,20 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y android-tools-adb
 
-      - name: Connect to Android Device with Retry
+      - name: Pair and Connect to Android Device
         run: |
           PHONE_IP="100.115.73.81"
-          PHONE_PORT="43207"
-          
-          echo "Connecting to ADB on $PHONE_IP:$PHONE_PORT..."
-          
-          CONNECTED=false
-          for i in {1..24}; do
-            if adb connect $PHONE_IP:$PHONE_PORT | grep -q "connected"; then
-              echo "Successfully connected to $PHONE_IP:$PHONE_PORT"
-              CONNECTED=true
-              break
-            fi
-            echo "Device unreachable or network restarting... Retrying in 5s ($i/24)"
-            sleep 5
-          done
+          PAIR_PORT="36231"
+          PAIR_CODE="855934"
+          CONN_PORT="32829"
 
-          if [ "$CONNECTED" = false ]; then
-            echo "Failed to connect to phone after multiple retries."
-            exit 1
-          fi
+          echo "$PAIR_CODE" | adb pair $PHONE_IP:$PAIR_PORT
+          adb connect $PHONE_IP:$CONN_PORT
+          adb devices
 
-      - name: Start Logging On-Device (Resilient to Internet Drop)
+      - name: Start Logging On-Device
         run: |
-          echo "Starting Logcat process directly on device storage (/sdcard/logcat.log)..."
-          
           adb shell "rm -f /sdcard/logcat.log"
-          
           adb shell "nohup logcat -f /sdcard/logcat.log *:V > /dev/null 2>&1 &"
           
           DURATION=${{ github.event.inputs.duration }}
@@ -62,13 +47,10 @@ jobs:
       - name: Pull Logcat File from Phone
         run: |
           PHONE_IP="100.115.73.81"
-          PHONE_PORT="43207"
+          CONN_PORT="32829"
           
-          adb connect $PHONE_IP:$PHONE_PORT || true
-
-          echo "Pulling logcat.log from device to GitHub Runner..."
+          adb connect $PHONE_IP:$CONN_PORT || true
           adb pull /sdcard/logcat.log ./android_logcat.log
-
           adb shell "pkill -f logcat" || true
 
       - name: Upload Logcat Artifact
