@@ -1,4 +1,4 @@
-Name: Logcat
+name: Logcat
 
 on:
   workflow_dispatch:
