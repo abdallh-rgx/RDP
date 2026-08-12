@@ -1,0 +1,81 @@
+Name: Logcat
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: ''
+        required: false
+        default: '60'
+
+jobs:
+  capture-logcat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v2
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      - name: Install ADB Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y android-tools-adb
+
+      - name: Connect to Android Device with Retry
+        run: |
+          PHONE_IP="100.115.73.81"
+          PHONE_PORT="43207"
+          
+          echo "Connecting to ADB on $PHONE_IP:$PHONE_PORT..."
+          
+          CONNECTED=false
+          for i in {1..24}; do
+            if adb connect $PHONE_IP:$PHONE_PORT | grep -q "connected"; then
+              echo "Successfully connected to $PHONE_IP:$PHONE_PORT"
+              CONNECTED=true
+              break
+            fi
+            echo "Device unreachable or network restarting... Retrying in 5s ($i/24)"
+            sleep 5
+          done
+
+          if [ "$CONNECTED" = false ]; then
+            echo "Failed to connect to phone after multiple retries."
+            exit 1
+          fi
+
+      - name: Start Logging On-Device (Resilient to Internet Drop)
+        run: |
+          echo "Starting Logcat process directly on device storage (/sdcard/logcat.log)..."
+          
+          adb shell "rm -f /sdcard/logcat.log"
+          
+          adb shell "nohup logcat -f /sdcard/logcat.log *:V > /dev/null 2>&1 &"
+          
+          DURATION=${{ github.event.inputs.duration }}
+          echo "Logging active. Waiting $DURATION seconds..."
+          sleep $DURATION
+
+      - name: Pull Logcat File from Phone
+        run: |
+          PHONE_IP="100.115.73.81"
+          PHONE_PORT="5555"
+          
+          adb connect $PHONE_IP:$PHONE_PORT || true
+
+          echo "Pulling logcat.log from device to GitHub Runner..."
+          adb pull /sdcard/logcat.log ./android_logcat.log
+
+          adb shell "pkill -f logcat" || true
+
+      - name: Upload Logcat Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: phone-logcat-file
+          path: android_logcat.log
+          retention-days: 7
