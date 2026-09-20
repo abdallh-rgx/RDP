@@ -1,4 +1,4 @@
-name: Android Remote with Tailscale
+name: Android Remote with VNC
 
 on:
   workflow_dispatch:
@@ -15,27 +15,13 @@ jobs:
           sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-android-$GITHUB_RUN_ID
           echo "TS_IP=$(tailscale ip -4)" >> $GITHUB_ENV
 
-      - name: Enable KVM (Hardware Acceleration)
+      - name: Run Android Container with VNC
         run: |
-          sudo apt-get update
-          sudo apt-get install -y qemu-kvm libvirt-daemon-system libvirt-clients bridge-utils
-          sudo adduser $USER kvm
-
-      - name: Run Android Container / Emulator
-        run: |
-     
           docker run -d --privileged \
             --name redroid \
             -p 5555:5555 \
-            redroid/redroid:11.0.0-latest
-
-      - name: Show Connection Info
-        run: |
-          echo "=========================================="
-          echo "Tailscale IP: $TS_IP"
-          echo "Connect via ADB: adb connect $TS_IP:5555"
-          echo "Use 'scrcpy --tcpip=$TS_IP:5555' to view screen"
-          echo "=========================================="
+            -p 5900:5900 \
+            sickcodes/docker-headless-vnc-container
 
       - name: Keep Alive
         run: |
