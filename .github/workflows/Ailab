@@ -1,0 +1,344 @@
+name: RE Lab
+
+on:
+  workflow_dispatch:
+
+jobs:
+  lab:
+    runs-on: windows-latest
+    timeout-minutes: 355
+
+    steps:
+      - name: Install tools
+        shell: pwsh
+        run: |
+          choco install 7zip -y --no-progress | Out-Null
+          Invoke-WebRequest "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" -OutFile C:\cloudflared.exe
+          python -m pip install --quiet flask anthropic PyGithub requests
+
+      - name: Download from Mediafire
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path C:\lab | Out-Null
+          $ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+          $urls = @(
+            @{n="ida.7z";    u="https://download1640.mediafire.com/axt51dm3fo5gaR2AB8SHSEGQXNbn5kiY2hDGi4q7n5DFqHJON_2ZuxUkRqaWEsBTDwV49-fhDXocksvGOMDMhJSfpxDCVQ8L_q_I-rzD76ZpAuZz9C5lGBgIx0ZoxuTyE1fB1odE1xZqU7d2AB_kyEHmbKC6l1kWB59uKPjw4wHh1FQ/ox1h6ko7d6y5s7m/IDA+Professional+9.1.7z"},
+            @{n="lib.7z";    u="https://download1078.mediafire.com/xrjrnmhrnvsg7eYwH2BiRNDlrltGB2fQtbazk6m98UOuv6OYRdAQJjYq4WwQDZ_GOgFBgktdinyIvCKSlr-lfe0Y7cU5K1cpmSdZVGeArX7ugze9KQXfzqVAZtBGG2-PJ0S7PhhDhT9xU4B44ZVqcDQdiFSLB0Evbp8SAt7Zged-5k8/a94sjxbhqwv3j6g/libUnreal_21.30.so.i64"},
+            @{n="src.zip";   u="https://download1322.mediafire.com/2tgz2dcxodggqS2rvHulFedsUxwus7UELUfTs6b6-dOHV7C0xXQVGwD6KlKzu5VgY6nF9IcjzKY4cESS3PVI99hCadlT3wAu-dTXRyCsf6ddgrZBeoEXWSfJfqzExJ11ExF4_MY1M620G8VR1mucOueh5tc1ea5GZhNYrXY_iZ1w6Yo/8f5r7ltcfiynt0w/src%284%29.zip"},
+            @{n="dumps.rar"; u="https://download1078.mediafire.com/2kk5q1yiw8bgX_IuVDXJ06rk1g600hYBdq2htbFRII7YQiO9WevoG0nc5BpArFhZinuPaSL6yuVyKba8x2Cr50lf8uU0_PI0uS3DyTIzie6KQGcKFtBr_k9bOfDCToXs2fJa_J4OKOmnP25M4CdxLZ_DF_crO654FgHP-afXFIAblIw/kybveaeqhgns3hl/Fortnite+Dumps.rar"}
+          )
+          foreach ($x in $urls) {
+            Write-Host "Downloading $($x.n)"
+            Invoke-WebRequest -Uri $x.u -OutFile "C:\lab\$($x.n)" -UserAgent $ua
+          }
+          Get-ChildItem C:\lab | Format-Table Name,Length
+
+      - name: Extract
+        shell: pwsh
+        run: |
+          $sz = "C:\Program Files\7-Zip\7z.exe"
+          & $sz x C:\lab\ida.7z    -oC:\lab\ida    -y | Out-Null
+          & $sz x C:\lab\dumps.rar -oC:\lab\dumps  -y | Out-Null
+          & $sz x C:\lab\src.zip   -oC:\lab\src    -y | Out-Null
+          & $sz x C:\lab\lib.7z    -oC:\lab\lib    -y | Out-Null
+          Remove-Item C:\lab\*.7z,C:\lab\*.rar,C:\lab\*.zip -Force -ErrorAction SilentlyContinue
+          Get-ChildItem C:\lab -Recurse -File | Measure-Object | ForEach-Object { Write-Host "Total files: $($_.Count)" }
+
+      - name: Write server
+        shell: pwsh
+        run: |
+          $py = @'
+from flask import Flask, request, jsonify, Response, send_file, render_template_string
+from github import Github
+import subprocess, os, threading, queue, json, time
+try:
+    import anthropic
+    AI = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY",""))
+except Exception:
+    AI = None
+
+app = Flask(__name__)
+LAB = r"C:\lab"
+GH_PAT = os.environ.get("GH_PAT","")
+gh = Github(GH_PAT) if GH_PAT else None
+messages = []
+subscribers = []
+
+def notify(role, text):
+    m = {"role": role, "text": text, "ts": time.time()}
+    messages.append(m)
+    for q in list(subscribers):
+        try: q.put_nowait(m)
+        except: pass
+
+PAGE = r"""
+<!doctype html><html lang="ar" dir="rtl"><meta charset="utf-8">
+<title>RE Lab Workspace</title>
+<style>
+:root{--bg:#0d1117;--panel:#161b22;--border:#30363d;--fg:#c9d1d9;--muted:#8b949e;--accent:#58a6ff;--green:#3fb950;--red:#f85149;--yellow:#d29922}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:-apple-system,'Segoe UI',Tahoma,sans-serif;font-size:14px}
+header{padding:14px 24px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;background:#010409}
+header h1{margin:0;font-size:17px;font-weight:600}
+header .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green);margin-left:6px;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.wrap{max-width:1200px;margin:0 auto;padding:20px;display:grid;gap:16px}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:16px}
+.card h2{margin:0 0 12px;font-size:15px;font-weight:600;color:var(--accent)}
+pre{background:#010409;border:1px solid var(--border);border-radius:6px;padding:10px;overflow:auto;max-height:340px;font-family:Consolas,monospace;font-size:12px;line-height:1.5}
+input,button,textarea{background:#010409;color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-family:inherit;font-size:13px}
+input:focus,textarea:focus{outline:none;border-color:var(--accent)}
+button{background:#21262d;cursor:pointer;transition:.15s}
+button:hover{background:#30363d;border-color:var(--accent)}
+.row{display:flex;gap:8px;margin-bottom:8px}
+.row input{flex:1}
+#chat{height:340px;overflow:auto;background:#010409;border:1px solid var(--border);border-radius:6px;padding:12px;margin-bottom:10px}
+.msg{padding:8px 12px;margin-bottom:8px;border-radius:6px;border-right:3px solid}
+.msg.user{background:#1c2128;border-color:var(--yellow)}
+.msg.assistant{background:#0d1a2b;border-color:var(--accent)}
+.msg .who{font-size:11px;color:var(--muted);margin-bottom:4px;font-weight:600}
+.file{display:flex;justify-content:space-between;padding:4px 8px;border-radius:4px}
+.file:hover{background:#1c2128}
+.file a{color:var(--accent);text-decoration:none}
+.size{color:var(--muted);font-size:11px}
+.flex{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:800px){.flex{grid-template-columns:1fr}}
+</style>
+<header>
+  <h1>RE Lab Workspace <span class="dot"></span></h1>
+  <div><span id="status">connected</span></div>
+</header>
+<div class="wrap">
+  <div class="flex">
+    <div class="card">
+      <h2>📁 ملفات المشروع</h2>
+      <pre id="files">جاري التحميل...</pre>
+    </div>
+    <div class="card">
+      <h2>📦 مستودع idk</h2>
+      <pre id="repo">جاري التحميل...</pre>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>⚙️ تنفيذ أمر (admin)</h2>
+    <div class="row">
+      <input id="cmd" placeholder="powershell command...">
+      <button onclick="runCmd()">تشغيل</button>
+    </div>
+    <pre id="out">الناتج...</pre>
+  </div>
+
+  <div class="card">
+    <h2>💬 دردشة الذكاء الاصطناعي + سجل الرسائل</h2>
+    <div id="chat"></div>
+    <div class="row">
+      <input id="msg" placeholder="اكتب مهمتك للذكاء الاصطناعي...">
+      <button onclick="sendMsg()">إرسال</button>
+    </div>
+  </div>
+</div>
+<script>
+async function load(){
+  try{
+    let r = await fetch('/files'); let j = await r.json();
+    document.getElementById('files').innerHTML = j.map(f =>
+      `<div class="file"><a href="/download?p=${encodeURIComponent(f.path)}">${f.path}</a><span class="size">${(f.size/1024).toFixed(1)} KB</span></div>`
+    ).join('');
+  }catch(e){document.getElementById('files').textContent = 'خطأ: '+e}
+  try{
+    let r = await fetch('/repos'); let j = await r.json();
+    document.getElementById('repo').textContent = JSON.stringify(j,null,2);
+  }catch(e){document.getElementById('repo').textContent = 'خطأ: '+e}
+}
+async function runCmd(){
+  let c = document.getElementById('cmd').value;
+  let r = await fetch('/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cmd:c})});
+  let j = await r.json();
+  document.getElementById('out').textContent = (j.stdout||'') + '\n---stderr---\n' + (j.stderr||'');
+}
+async function sendMsg(){
+  let m = document.getElementById('msg').value;
+  if(!m) return;
+  document.getElementById('msg').value = '';
+  await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({msg:m})});
+}
+function addMsg(d){
+  let c = document.getElementById('chat');
+  let div = document.createElement('div');
+  div.className = 'msg ' + d.role;
+  div.innerHTML = `<div class="who">${d.role === 'user' ? 'أنت' : 'AI'} • ${new Date(d.ts*1000).toLocaleTimeString()}</div>${d.text.replace(/</g,'&lt;')}`;
+  c.appendChild(div);
+  c.scrollTop = c.scrollHeight;
+}
+let es = new EventSource('/events');
+es.onmessage = e => addMsg(JSON.parse(e.data));
+es.onerror = () => document.getElementById('status').textContent = 'reconnecting...';
+load();
+setInterval(load, 30000);
+</script>
+</html>
+"""
+
+@app.route("/")
+def index(): return render_template_string(PAGE)
+
+@app.route("/api")
+def api_doc():
+    return jsonify({
+        "endpoints": {
+            "GET /files": "قائمة ملفات C:\\lab",
+            "GET /download?p=path": "تنزيل ملف",
+            "POST /run {cmd}": "تنفيذ أمر powershell كمدير",
+            "GET /repos?p=path": "قراءة مستودع idk",
+            "POST /repo-write {path,content,msg}": "كتابة ملف في المستودع",
+            "POST /chat {msg}": "استشارة الذكاء الاصطناعي",
+            "GET /messages": "كل الرسائل",
+            "GET /events": "SSE للرسائل الحية",
+            "POST /dispatch {workflow}": "تشغيل GitHub Action"
+        }
+    })
+
+@app.route("/files")
+def files():
+    out = []
+    for root, _, fs in os.walk(LAB):
+        for f in fs:
+            p = os.path.join(root, f)
+            try: out.append({"path": os.path.relpath(p, LAB), "size": os.path.getsize(p)})
+            except: pass
+    return jsonify(out)
+
+@app.route("/download")
+def download():
+    p = request.args.get("p","")
+    full = os.path.abspath(os.path.join(LAB, p))
+    if not full.startswith(os.path.abspath(LAB)): return "forbidden", 403
+    return send_file(full, as_attachment=True)
+
+@app.route("/run", methods=["POST"])
+def run():
+    cmd = request.json.get("cmd","")
+    try:
+        r = subprocess.run(["powershell","-NoProfile","-Command",cmd],
+                           capture_output=True, text=True, timeout=900)
+        return jsonify(stdout=r.stdout, stderr=r.stderr, code=r.returncode)
+    except Exception as e:
+        return jsonify(stdout="", stderr=str(e), code=-1)
+
+@app.route("/chat", methods=["POST"])
+def chat():
+    msg = request.json.get("msg","")
+    notify("user", msg)
+    listing = []
+    for root,_,fs in os.walk(LAB):
+        for f in fs: listing.append(os.path.relpath(os.path.join(root,f),LAB))
+    if AI is None:
+        reply = "[AI غير مهيأ - أضف ANTHROPIC_API_KEY في secrets]"
+    else:
+        try:
+            resp = AI.messages.create(
+                model="claude-sonnet-4-5",
+                max_tokens=8000,
+                system="You are a reverse-engineering assistant with full admin access to a Windows machine. Files are in C:\\lab. IDA Pro is installed. Use the HTTP tools to inspect files and run commands.",
+                messages=[{"role":"user","content": f"Files:\n" + "\n".join(listing) + f"\n\nTask: {msg}"}]
+            )
+            reply = resp.content[0].text
+        except Exception as e:
+            reply = f"[AI error] {e}"
+    notify("assistant", reply)
+    return jsonify(reply=reply)
+
+@app.route("/events")
+def events():
+    def stream():
+        q = queue.Queue()
+        subscribers.append(q)
+        try:
+            for old in messages[-50:]:
+                yield f"data: {json.dumps(old)}\n\n"
+            while True:
+                yield f"data: {json.dumps(q.get())}\n\n"
+        finally:
+            if q in subscribers: subscribers.remove(q)
+    return Response(stream(), mimetype="text/event-stream")
+
+@app.route("/messages")
+def get_messages(): return jsonify(messages)
+
+@app.route("/repos")
+def repos():
+    if not gh: return jsonify(error="no PAT")
+    repo = gh.get_repo(os.environ.get("IDK_REPO",""))
+    p = request.args.get("p","")
+    try:
+        return jsonify([{"name":c.name,"type":c.type,"path":c.path,"size":c.size} for c in repo.get_contents(p)])
+    except Exception as e:
+        return jsonify(error=str(e))
+
+@app.route("/repo-write", methods=["POST"])
+def repo_write():
+    if not gh: return jsonify(error="no PAT")
+    repo = gh.get_repo(os.environ.get("IDK_REPO",""))
+    d = request.json
+    try:
+        f = repo.get_contents(d["path"])
+        repo.update_file(d["path"], d.get("msg","update"), d["content"], f.sha)
+    except Exception:
+        repo.create_file(d["path"], d.get("msg","create"), d["content"])
+    return jsonify(ok=True)
+
+@app.route("/dispatch", methods=["POST"])
+def dispatch():
+    if not gh: return jsonify(error="no PAT")
+    repo = gh.get_repo(os.environ.get("GITHUB_REPOSITORY",""))
+    wf = repo.get_workflow(request.json["workflow"])
+    wf.create_dispatch(ref=request.json.get("ref","main"))
+    return jsonify(ok=True)
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8000, threaded=True)
+'@
+          Set-Content -Path C:\server.py -Value $py -Encoding UTF8
+
+      - name: Start server + tunnel
+        shell: pwsh
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          IDK_REPO: abdallh-rgx/idk
+        run: |
+          Start-Process python -ArgumentList "C:\server.py" -NoNewWindow -RedirectStandardOutput C:\srv.log -RedirectStandardError C:\srv.err
+          Start-Sleep 6
+          Start-Process C:\cloudflared.exe -ArgumentList "tunnel --url http://localhost:8000 --no-autoupdate" -RedirectStandardError C:\cf.log -NoNewWindow
+
+          $url = ""
+          for ($i=0; $i -lt 60; $i++) {
+            Start-Sleep 3
+            if (Test-Path C:\cf.log) {
+              $c = Get-Content C:\cf.log -Raw
+              if ($c -match 'https://[a-z0-9-]+\.trycloudflare\.com') {
+                $url = $matches[0]
+                break
+              }
+            }
+          }
+          Write-Host "============================================"
+          Write-Host "PUBLIC URL: $url"
+          Write-Host "============================================"
+          echo "PUBLIC_URL=$url" >> $env:GITHUB_ENV
+
+      - name: Chain next run
+        shell: pwsh
+        run: |
+          Start-Sleep -Seconds 20100
+          $body = @{ ref = "main" } | ConvertTo-Json
+          Invoke-RestMethod -Method Post `
+            -Uri "https://api.github.com/repos/${{ github.repository }}/actions/workflows/lab.yml/dispatches" `
+            -Headers @{ Authorization = "Bearer ${{ secrets.GH_PAT }}"; Accept = "application/vnd.github+json" } `
+            -Body $body -ContentType "application/json"
+
+      - name: Keep alive
+        shell: pwsh
+        run: while ($true) { Start-Sleep 300 }
