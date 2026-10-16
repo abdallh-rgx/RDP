@@ -9,17 +9,23 @@ jobs:
     timeout-minutes: 355
 
     steps:
+      - name: Check disks
+        shell: pwsh
+        run: |
+          Get-PSDrive -PSProvider FileSystem | Select-Object Name,@{n='FreeGB';e={[math]::Round($_.Free/1GB,2)}},@{n='UsedGB';e={[math]::Round($_.Used/1GB,2)}}
+          if (-not (Test-Path D:\)) { throw "D: drive not found" }
+          New-Item -ItemType Directory -Force -Path D:\lab | Out-Null
+
       - name: Install tools
         shell: pwsh
         run: |
           choco install 7zip -y --no-progress | Out-Null
-          Invoke-WebRequest "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" -OutFile C:\cloudflared.exe
+          Invoke-WebRequest "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" -OutFile D:\cloudflared.exe
           python -m pip install --quiet flask anthropic PyGithub requests
 
       - name: Download from Mediafire
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path C:\lab | Out-Null
           $ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
           $urls = @(
             @{n="ida.7z";    u="https://download1640.mediafire.com/axt51dm3fo5gaR2AB8SHSEGQXNbn5kiY2hDGi4q7n5DFqHJON_2ZuxUkRqaWEsBTDwV49-fhDXocksvGOMDMhJSfpxDCVQ8L_q_I-rzD76ZpAuZz9C5lGBgIx0ZoxuTyE1fB1odE1xZqU7d2AB_kyEHmbKC6l1kWB59uKPjw4wHh1FQ/ox1h6ko7d6y5s7m/IDA+Professional+9.1.7z"},
@@ -29,19 +35,21 @@ jobs:
           )
           foreach ($x in $urls) {
             Write-Host "Downloading $($x.n)"
-            Invoke-WebRequest -Uri $x.u -OutFile "C:\lab\$($x.n)" -UserAgent $ua
+            Invoke-WebRequest -Uri $x.u -OutFile "D:\lab\$($x.n)" -UserAgent $ua
           }
+          Get-ChildItem D:\lab | Format-Table Name,Length
 
       - name: Extract
         shell: pwsh
         run: |
           $sz = "C:\Program Files\7-Zip\7z.exe"
-          & $sz x C:\lab\ida.7z    -oC:\lab\ida    -y | Out-Null
-          & $sz x C:\lab\dumps.rar -oC:\lab\dumps  -y | Out-Null
-          & $sz x C:\lab\src.zip   -oC:\lab\src    -y | Out-Null
-          & $sz x C:\lab\lib.7z    -oC:\lab\lib    -y | Out-Null
-          Remove-Item C:\lab\*.7z,C:\lab\*.rar,C:\lab\*.zip -Force -ErrorAction SilentlyContinue
-          Get-ChildItem C:\lab -Recurse -File | Measure-Object | ForEach-Object { Write-Host "Total files: $($_.Count)" }
+          & $sz x D:\lab\ida.7z    -oD:\lab\ida    -y | Out-Null
+          & $sz x D:\lab\dumps.rar -oD:\lab\dumps  -y | Out-Null
+          & $sz x D:\lab\src.zip   -oD:\lab\src    -y | Out-Null
+          & $sz x D:\lab\lib.7z    -oD:\lab\lib    -y | Out-Null
+          Remove-Item D:\lab\*.7z,D:\lab\*.rar,D:\lab\*.zip -Force -ErrorAction SilentlyContinue
+          Get-ChildItem D:\lab -Recurse -File | Measure-Object | ForEach-Object { Write-Host "Total files: $($_.Count)" }
+          Get-PSDrive D | Select-Object @{n='FreeGB';e={[math]::Round($_.Free/1GB,2)}}
 
       - name: Write server
         shell: pwsh
@@ -57,7 +65,7 @@ jobs:
               AI = None
 
           app = Flask(__name__)
-          LAB = r"C:\lab"
+          LAB = r"D:\lab"
           GH_PAT = os.environ.get("GH_PAT","")
           gh = Github(GH_PAT) if GH_PAT else None
           messages = []
@@ -80,19 +88,12 @@ jobs:
           <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
           <style>
           :root{
-            --bg:#05070f;
-            --bg2:#0a0f1c;
-            --panel:rgba(18,24,42,0.72);
-            --panel2:rgba(24,31,52,0.55);
-            --border:rgba(124,92,255,0.18);
-            --border2:rgba(124,92,255,0.35);
-            --fg:#e8edf5;
-            --muted:#8792a8;
-            --accent:#7c5cff;
-            --accent2:#22d3ee;
-            --green:#4ade80;
-            --yellow:#fbbf24;
-            --red:#f87171;
+            --bg:#05070f;--bg2:#0a0f1c;
+            --panel:rgba(18,24,42,0.72);--panel2:rgba(24,31,52,0.55);
+            --border:rgba(124,92,255,0.18);--border2:rgba(124,92,255,0.35);
+            --fg:#e8edf5;--muted:#8792a8;
+            --accent:#7c5cff;--accent2:#22d3ee;
+            --green:#4ade80;--yellow:#fbbf24;--red:#f87171;
             --grad:linear-gradient(135deg,#7c5cff 0%,#22d3ee 100%);
             --glow:0 0 32px rgba(124,92,255,0.25);
           }
@@ -100,8 +101,7 @@ jobs:
           html,body{height:100%}
           body{
             font-family:'Inter','Segoe UI',sans-serif;
-            background:var(--bg);color:var(--fg);font-size:14px;line-height:1.6;
-            overflow:hidden;
+            background:var(--bg);color:var(--fg);font-size:14px;line-height:1.6;overflow:hidden;
             background-image:
               radial-gradient(circle at 0% 0%,rgba(124,92,255,0.18),transparent 45%),
               radial-gradient(circle at 100% 100%,rgba(34,211,238,0.14),transparent 45%),
@@ -116,27 +116,22 @@ jobs:
             mask-image:radial-gradient(ellipse at center,black 20%,transparent 85%);
           }
           .app{
-            position:relative;z-index:1;
-            display:grid;
+            position:relative;z-index:1;display:grid;
             grid-template-columns:360px 1fr;
             grid-template-rows:auto 1fr;
             grid-template-areas:"header header" "sidebar main";
             height:100vh;gap:14px;padding:14px;
           }
           header{
-            grid-area:header;
-            display:flex;align-items:center;justify-content:space-between;
+            grid-area:header;display:flex;align-items:center;justify-content:space-between;
             padding:14px 22px;border-radius:16px;
             background:var(--panel);backdrop-filter:blur(20px);
-            border:1px solid var(--border);
-            box-shadow:var(--glow);
+            border:1px solid var(--border);box-shadow:var(--glow);
           }
           .brand{display:flex;align-items:center;gap:12px}
           .logo{
-            width:38px;height:38px;border-radius:11px;
-            background:var(--grad);
-            display:grid;place-items:center;
-            box-shadow:0 0 24px rgba(124,92,255,0.55);
+            width:38px;height:38px;border-radius:11px;background:var(--grad);
+            display:grid;place-items:center;box-shadow:0 0 24px rgba(124,92,255,0.55);
             font-size:18px;font-weight:800;color:#fff;
           }
           .brand h1{
@@ -150,7 +145,7 @@ jobs:
             color:#b5a3ff;font-weight:600;letter-spacing:0.4px;text-transform:uppercase;
           }
           .status{
-            display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);
+            display:flex;align-items:center;gap:8px;font-size:12px;
             padding:6px 14px;border-radius:20px;background:rgba(74,222,128,0.08);
             border:1px solid rgba(74,222,128,0.25);font-weight:600;color:#86efac;
           }
@@ -161,10 +156,8 @@ jobs:
           }
           @keyframes pulse{0%{transform:scale(1);opacity:0.6}100%{transform:scale(2.2);opacity:0}}
           @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
-
           .sidebar{grid-area:sidebar;display:flex;flex-direction:column;gap:14px;overflow:hidden;min-height:0}
           .main{grid-area:main;display:flex;flex-direction:column;gap:14px;overflow:hidden;min-height:0}
-
           .panel{
             background:var(--panel);backdrop-filter:blur(20px);
             border:1px solid var(--border);border-radius:16px;
@@ -186,15 +179,12 @@ jobs:
             font-size:11px;color:var(--muted);padding:2px 8px;border-radius:10px;
             background:rgba(124,92,255,0.12);border:1px solid var(--border);
           }
-
           .files{flex:1.4;min-height:200px}
           .repo{flex:1;min-height:160px}
-
           .filetree{overflow:auto;flex:1;padding-right:4px}
           .filetree::-webkit-scrollbar,pre::-webkit-scrollbar,#chat::-webkit-scrollbar{width:6px;height:6px}
           .filetree::-webkit-scrollbar-thumb,pre::-webkit-scrollbar-thumb,#chat::-webkit-scrollbar-thumb{background:rgba(124,92,255,0.35);border-radius:3px}
           .filetree::-webkit-scrollbar-track,pre::-webkit-scrollbar-track,#chat::-webkit-scrollbar-track{background:transparent}
-
           .file{
             display:flex;align-items:center;justify-content:space-between;gap:8px;
             padding:7px 10px;border-radius:9px;margin-bottom:3px;
@@ -206,12 +196,9 @@ jobs:
             font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;
             direction:ltr;text-align:left;
           }
-          .file .ext{
-            display:inline-block;width:24px;text-align:center;font-size:13px;margin-left:6px;
-          }
+          .file .ext{display:inline-block;width:24px;text-align:center;font-size:13px;margin-left:6px}
           .file .size{font-size:10.5px;color:var(--muted);white-space:nowrap;font-family:'JetBrains Mono',monospace}
           .empty{color:var(--muted);font-size:12px;text-align:center;padding:20px;font-style:italic}
-
           pre{
             font-family:'JetBrains Mono','Consolas',monospace;font-size:11.5px;
             line-height:1.55;color:#cbd5e1;
@@ -220,17 +207,10 @@ jobs:
             direction:ltr;text-align:left;
           }
           pre.term{color:#86efac;background:rgba(0,10,4,0.6);border-color:rgba(74,222,128,0.2)}
-          pre.term::before{
-            content:'PS> ';color:var(--green);opacity:0.6;
-          }
-
+          pre.term::before{content:'PS> ';color:var(--green);opacity:0.6}
           .chat{flex:1;min-height:280px}
-          #chat{
-            flex:1;overflow:auto;padding:8px 4px 8px 0;display:flex;flex-direction:column;gap:10px;
-          }
-          .msg{
-            display:flex;gap:10px;animation:fadeIn 0.3s ease both;
-          }
+          #chat{flex:1;overflow:auto;padding:8px 4px 8px 0;display:flex;flex-direction:column;gap:10px}
+          .msg{display:flex;gap:10px;animation:fadeIn 0.3s ease both}
           .msg.user{flex-direction:row-reverse}
           .avatar{
             width:32px;height:32px;border-radius:10px;flex-shrink:0;
@@ -246,7 +226,6 @@ jobs:
           .msg.user .bubble{background:rgba(251,191,36,0.10);border:1px solid rgba(251,191,36,0.25);color:#fef3c7}
           .msg.assistant .bubble{background:rgba(124,92,255,0.10);border:1px solid var(--border2);color:#e0e7ff}
           .meta{font-size:10px;color:var(--muted);margin-top:5px;font-weight:500;opacity:0.7}
-
           .input-bar{display:flex;gap:8px;margin-top:12px}
           input[type=text],input:not([type]){
             flex:1;padding:11px 14px;border-radius:11px;
@@ -262,35 +241,27 @@ jobs:
           }
           button:hover{transform:translateY(-1px);box-shadow:0 0 28px rgba(124,92,255,0.55)}
           button:active{transform:translateY(0)}
-
           .terminal{min-height:180px;flex:1}
-
           .loader{display:flex;gap:4px;padding:10px}
           .loader span{width:6px;height:6px;border-radius:50%;background:var(--accent);animation:bounce 1.2s infinite}
           .loader span:nth-child(2){animation-delay:0.15s}
           .loader span:nth-child(3){animation-delay:0.3s}
           @keyframes bounce{0%,80%,100%{opacity:0.3;transform:scale(0.8)}40%{opacity:1;transform:scale(1)}}
-
           @media(max-width:900px){
             .app{grid-template-columns:1fr;grid-template-areas:"header" "main" "sidebar";height:auto;overflow:auto}
             body{overflow:auto}
             .panel{max-height:70vh}
           }
           </style></head><body>
-
           <div class="app">
             <header>
               <div class="brand">
                 <div class="logo">R</div>
-                <div>
-                  <h1>RE Lab</h1>
-                  <div class="sub">Reverse Engineering Workspace</div>
-                </div>
+                <div><h1>RE Lab</h1><div class="sub">Reverse Engineering Workspace</div></div>
                 <span class="badge">v1.0</span>
               </div>
               <div class="status"><span class="pulse"></span><span id="status">Live</span></div>
             </header>
-
             <aside class="sidebar">
               <section class="panel files">
                 <div class="panel-head">
@@ -300,13 +271,10 @@ jobs:
                 <div class="filetree" id="files"><div class="loader"><span></span><span></span><span></span></div></div>
               </section>
               <section class="panel repo">
-                <div class="panel-head">
-                  <h2><span class="ico">📦</span>idk repo</h2>
-                </div>
+                <div class="panel-head"><h2><span class="ico">📦</span>idk repo</h2></div>
                 <pre id="repo">loading...</pre>
               </section>
             </aside>
-
             <main class="main">
               <section class="panel chat">
                 <div class="panel-head">
@@ -319,21 +287,19 @@ jobs:
                   <button onclick="sendMsg()">Send</button>
                 </div>
               </section>
-
               <section class="panel terminal">
                 <div class="panel-head">
                   <h2><span class="ico">⚙️</span>Terminal • Admin</h2>
                   <span class="count">powershell</span>
                 </div>
                 <div class="input-bar" style="margin:0 0 12px">
-                  <input id="cmd" placeholder="dir C:\lab">
+                  <input id="cmd" placeholder="dir D:\lab">
                   <button onclick="runCmd()">Run</button>
                 </div>
                 <pre class="term" id="out">Ready.</pre>
               </section>
             </main>
           </div>
-
           <script>
           function extIcon(name){
             const n = name.toLowerCase();
@@ -454,7 +420,7 @@ jobs:
               else:
                   try:
                       resp=AI.messages.create(model="claude-sonnet-4-5",max_tokens=8000,
-                          system="You are a reverse-engineering assistant with full admin access to a Windows machine. Files are in C:\\lab. IDA Pro is installed. Use the HTTP endpoints to inspect files and run commands.",
+                          system="You are a reverse-engineering assistant with full admin access to a Windows machine. Files are in D:\\lab. IDA Pro is installed. Use the HTTP endpoints to inspect files and run commands.",
                           messages=[{"role":"user","content":"Files:\n"+"\n".join(listing)+"\n\nTask: "+msg}])
                       reply=resp.content[0].text
                   except Exception as e:
@@ -507,10 +473,16 @@ jobs:
               wf.create_dispatch(ref=request.json.get("ref","main"))
               return jsonify(ok=True)
 
+          @app.route("/disk")
+          def disk():
+              import shutil
+              total, used, free = shutil.disk_usage("D:\\")
+              return jsonify({"total_gb": round(total/1e9,2), "used_gb": round(used/1e9,2), "free_gb": round(free/1e9,2)})
+
           if __name__=="__main__":
               app.run(host="0.0.0.0",port=8000,threaded=True)
           '@
-          Set-Content -Path C:\server.py -Value $py -Encoding UTF8
+          Set-Content -Path D:\server.py -Value $py -Encoding UTF8
 
       - name: Start server + tunnel
         shell: pwsh
@@ -520,15 +492,15 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           IDK_REPO: abdallh-rgx/idk
         run: |
-          Start-Process python -ArgumentList "C:\server.py" -NoNewWindow -RedirectStandardOutput C:\srv.log -RedirectStandardError C:\srv.err
+          Start-Process python -ArgumentList "D:\server.py" -NoNewWindow -RedirectStandardOutput D:\srv.log -RedirectStandardError D:\srv.err
           Start-Sleep 6
-          Start-Process C:\cloudflared.exe -ArgumentList "tunnel --url http://localhost:8000 --no-autoupdate" -RedirectStandardError C:\cf.log -NoNewWindow
+          Start-Process D:\cloudflared.exe -ArgumentList "tunnel --url http://localhost:8000 --no-autoupdate" -RedirectStandardError D:\cf.log -NoNewWindow
 
           $url = ""
           for ($i=0; $i -lt 60; $i++) {
             Start-Sleep 3
-            if (Test-Path C:\cf.log) {
-              $c = Get-Content C:\cf.log -Raw
+            if (Test-Path D:\cf.log) {
+              $c = Get-Content D:\cf.log -Raw
               if ($c -match 'https://[a-z0-9-]+\.trycloudflare\.com') {
                 $url = $matches[0]
                 break
