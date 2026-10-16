@@ -31,7 +31,6 @@ jobs:
             Write-Host "Downloading $($x.n)"
             Invoke-WebRequest -Uri $x.u -OutFile "C:\lab\$($x.n)" -UserAgent $ua
           }
-          Get-ChildItem C:\lab | Format-Table Name,Length
 
       - name: Extract
         shell: pwsh
@@ -48,257 +47,469 @@ jobs:
         shell: pwsh
         run: |
           $py = @'
-from flask import Flask, request, jsonify, Response, send_file, render_template_string
-from github import Github
-import subprocess, os, threading, queue, json, time
-try:
-    import anthropic
-    AI = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY",""))
-except Exception:
-    AI = None
+          from flask import Flask, request, jsonify, Response, send_file, render_template_string
+          from github import Github
+          import subprocess, os, queue, json, time
+          try:
+              import anthropic
+              AI = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY",""))
+          except Exception:
+              AI = None
 
-app = Flask(__name__)
-LAB = r"C:\lab"
-GH_PAT = os.environ.get("GH_PAT","")
-gh = Github(GH_PAT) if GH_PAT else None
-messages = []
-subscribers = []
+          app = Flask(__name__)
+          LAB = r"C:\lab"
+          GH_PAT = os.environ.get("GH_PAT","")
+          gh = Github(GH_PAT) if GH_PAT else None
+          messages = []
+          subscribers = []
+          boot = time.time()
 
-def notify(role, text):
-    m = {"role": role, "text": text, "ts": time.time()}
-    messages.append(m)
-    for q in list(subscribers):
-        try: q.put_nowait(m)
-        except: pass
+          def notify(role, text):
+              m = {"role": role, "text": text, "ts": time.time()}
+              messages.append(m)
+              for q in list(subscribers):
+                  try: q.put_nowait(m)
+                  except: pass
 
-PAGE = r"""
-<!doctype html><html lang="ar" dir="rtl"><meta charset="utf-8">
-<title>RE Lab Workspace</title>
-<style>
-:root{--bg:#0d1117;--panel:#161b22;--border:#30363d;--fg:#c9d1d9;--muted:#8b949e;--accent:#58a6ff;--green:#3fb950;--red:#f85149;--yellow:#d29922}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);font-family:-apple-system,'Segoe UI',Tahoma,sans-serif;font-size:14px}
-header{padding:14px 24px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;background:#010409}
-header h1{margin:0;font-size:17px;font-weight:600}
-header .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green);margin-left:6px;animation:pulse 2s infinite}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
-.wrap{max-width:1200px;margin:0 auto;padding:20px;display:grid;gap:16px}
-.card{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:16px}
-.card h2{margin:0 0 12px;font-size:15px;font-weight:600;color:var(--accent)}
-pre{background:#010409;border:1px solid var(--border);border-radius:6px;padding:10px;overflow:auto;max-height:340px;font-family:Consolas,monospace;font-size:12px;line-height:1.5}
-input,button,textarea{background:#010409;color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-family:inherit;font-size:13px}
-input:focus,textarea:focus{outline:none;border-color:var(--accent)}
-button{background:#21262d;cursor:pointer;transition:.15s}
-button:hover{background:#30363d;border-color:var(--accent)}
-.row{display:flex;gap:8px;margin-bottom:8px}
-.row input{flex:1}
-#chat{height:340px;overflow:auto;background:#010409;border:1px solid var(--border);border-radius:6px;padding:12px;margin-bottom:10px}
-.msg{padding:8px 12px;margin-bottom:8px;border-radius:6px;border-right:3px solid}
-.msg.user{background:#1c2128;border-color:var(--yellow)}
-.msg.assistant{background:#0d1a2b;border-color:var(--accent)}
-.msg .who{font-size:11px;color:var(--muted);margin-bottom:4px;font-weight:600}
-.file{display:flex;justify-content:space-between;padding:4px 8px;border-radius:4px}
-.file:hover{background:#1c2128}
-.file a{color:var(--accent);text-decoration:none}
-.size{color:var(--muted);font-size:11px}
-.flex{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-@media(max-width:800px){.flex{grid-template-columns:1fr}}
-</style>
-<header>
-  <h1>RE Lab Workspace <span class="dot"></span></h1>
-  <div><span id="status">connected</span></div>
-</header>
-<div class="wrap">
-  <div class="flex">
-    <div class="card">
-      <h2>📁 ملفات المشروع</h2>
-      <pre id="files">جاري التحميل...</pre>
-    </div>
-    <div class="card">
-      <h2>📦 مستودع idk</h2>
-      <pre id="repo">جاري التحميل...</pre>
-    </div>
-  </div>
+          PAGE = r"""
+          <!doctype html><html lang="ar" dir="rtl"><head>
+          <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+          <title>RE Lab • Workspace</title>
+          <link rel="preconnect" href="https://fonts.googleapis.com">
+          <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+          <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+          <style>
+          :root{
+            --bg:#05070f;
+            --bg2:#0a0f1c;
+            --panel:rgba(18,24,42,0.72);
+            --panel2:rgba(24,31,52,0.55);
+            --border:rgba(124,92,255,0.18);
+            --border2:rgba(124,92,255,0.35);
+            --fg:#e8edf5;
+            --muted:#8792a8;
+            --accent:#7c5cff;
+            --accent2:#22d3ee;
+            --green:#4ade80;
+            --yellow:#fbbf24;
+            --red:#f87171;
+            --grad:linear-gradient(135deg,#7c5cff 0%,#22d3ee 100%);
+            --glow:0 0 32px rgba(124,92,255,0.25);
+          }
+          *{box-sizing:border-box;margin:0;padding:0}
+          html,body{height:100%}
+          body{
+            font-family:'Inter','Segoe UI',sans-serif;
+            background:var(--bg);color:var(--fg);font-size:14px;line-height:1.6;
+            overflow:hidden;
+            background-image:
+              radial-gradient(circle at 0% 0%,rgba(124,92,255,0.18),transparent 45%),
+              radial-gradient(circle at 100% 100%,rgba(34,211,238,0.14),transparent 45%),
+              radial-gradient(circle at 50% 50%,rgba(124,92,255,0.06),transparent 70%);
+          }
+          body::before{
+            content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
+            background-image:
+              linear-gradient(rgba(124,92,255,0.045) 1px,transparent 1px),
+              linear-gradient(90deg,rgba(124,92,255,0.045) 1px,transparent 1px);
+            background-size:44px 44px;
+            mask-image:radial-gradient(ellipse at center,black 20%,transparent 85%);
+          }
+          .app{
+            position:relative;z-index:1;
+            display:grid;
+            grid-template-columns:360px 1fr;
+            grid-template-rows:auto 1fr;
+            grid-template-areas:"header header" "sidebar main";
+            height:100vh;gap:14px;padding:14px;
+          }
+          header{
+            grid-area:header;
+            display:flex;align-items:center;justify-content:space-between;
+            padding:14px 22px;border-radius:16px;
+            background:var(--panel);backdrop-filter:blur(20px);
+            border:1px solid var(--border);
+            box-shadow:var(--glow);
+          }
+          .brand{display:flex;align-items:center;gap:12px}
+          .logo{
+            width:38px;height:38px;border-radius:11px;
+            background:var(--grad);
+            display:grid;place-items:center;
+            box-shadow:0 0 24px rgba(124,92,255,0.55);
+            font-size:18px;font-weight:800;color:#fff;
+          }
+          .brand h1{
+            font-size:17px;font-weight:700;letter-spacing:-0.2px;
+            background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent;
+          }
+          .brand .sub{font-size:11px;color:var(--muted);font-weight:500}
+          .badge{
+            font-size:10px;padding:3px 9px;border-radius:20px;
+            background:rgba(124,92,255,0.15);border:1px solid var(--border2);
+            color:#b5a3ff;font-weight:600;letter-spacing:0.4px;text-transform:uppercase;
+          }
+          .status{
+            display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);
+            padding:6px 14px;border-radius:20px;background:rgba(74,222,128,0.08);
+            border:1px solid rgba(74,222,128,0.25);font-weight:600;color:#86efac;
+          }
+          .pulse{width:8px;height:8px;border-radius:50%;background:var(--green);position:relative}
+          .pulse::after{
+            content:'';position:absolute;inset:-3px;border-radius:50%;
+            background:var(--green);opacity:0.5;animation:pulse 1.6s ease-out infinite;
+          }
+          @keyframes pulse{0%{transform:scale(1);opacity:0.6}100%{transform:scale(2.2);opacity:0}}
+          @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 
-  <div class="card">
-    <h2>⚙️ تنفيذ أمر (admin)</h2>
-    <div class="row">
-      <input id="cmd" placeholder="powershell command...">
-      <button onclick="runCmd()">تشغيل</button>
-    </div>
-    <pre id="out">الناتج...</pre>
-  </div>
+          .sidebar{grid-area:sidebar;display:flex;flex-direction:column;gap:14px;overflow:hidden;min-height:0}
+          .main{grid-area:main;display:flex;flex-direction:column;gap:14px;overflow:hidden;min-height:0}
 
-  <div class="card">
-    <h2>💬 دردشة الذكاء الاصطناعي + سجل الرسائل</h2>
-    <div id="chat"></div>
-    <div class="row">
-      <input id="msg" placeholder="اكتب مهمتك للذكاء الاصطناعي...">
-      <button onclick="sendMsg()">إرسال</button>
-    </div>
-  </div>
-</div>
-<script>
-async function load(){
-  try{
-    let r = await fetch('/files'); let j = await r.json();
-    document.getElementById('files').innerHTML = j.map(f =>
-      `<div class="file"><a href="/download?p=${encodeURIComponent(f.path)}">${f.path}</a><span class="size">${(f.size/1024).toFixed(1)} KB</span></div>`
-    ).join('');
-  }catch(e){document.getElementById('files').textContent = 'خطأ: '+e}
-  try{
-    let r = await fetch('/repos'); let j = await r.json();
-    document.getElementById('repo').textContent = JSON.stringify(j,null,2);
-  }catch(e){document.getElementById('repo').textContent = 'خطأ: '+e}
-}
-async function runCmd(){
-  let c = document.getElementById('cmd').value;
-  let r = await fetch('/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cmd:c})});
-  let j = await r.json();
-  document.getElementById('out').textContent = (j.stdout||'') + '\n---stderr---\n' + (j.stderr||'');
-}
-async function sendMsg(){
-  let m = document.getElementById('msg').value;
-  if(!m) return;
-  document.getElementById('msg').value = '';
-  await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({msg:m})});
-}
-function addMsg(d){
-  let c = document.getElementById('chat');
-  let div = document.createElement('div');
-  div.className = 'msg ' + d.role;
-  div.innerHTML = `<div class="who">${d.role === 'user' ? 'أنت' : 'AI'} • ${new Date(d.ts*1000).toLocaleTimeString()}</div>${d.text.replace(/</g,'&lt;')}`;
-  c.appendChild(div);
-  c.scrollTop = c.scrollHeight;
-}
-let es = new EventSource('/events');
-es.onmessage = e => addMsg(JSON.parse(e.data));
-es.onerror = () => document.getElementById('status').textContent = 'reconnecting...';
-load();
-setInterval(load, 30000);
-</script>
-</html>
-"""
+          .panel{
+            background:var(--panel);backdrop-filter:blur(20px);
+            border:1px solid var(--border);border-radius:16px;
+            padding:16px 18px;display:flex;flex-direction:column;
+            overflow:hidden;min-height:0;animation:fadeIn 0.4s ease both;
+            box-shadow:0 4px 30px rgba(0,0,0,0.25);
+          }
+          .panel:hover{border-color:var(--border2);transition:border-color 0.3s}
+          .panel-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+          .panel h2{
+            font-size:13px;font-weight:700;letter-spacing:0.3px;
+            display:flex;align-items:center;gap:8px;color:#cbd5e1;text-transform:uppercase;
+          }
+          .panel h2 .ico{
+            width:22px;height:22px;border-radius:7px;display:grid;place-items:center;
+            background:rgba(124,92,255,0.15);border:1px solid var(--border2);font-size:11px;
+          }
+          .count{
+            font-size:11px;color:var(--muted);padding:2px 8px;border-radius:10px;
+            background:rgba(124,92,255,0.12);border:1px solid var(--border);
+          }
 
-@app.route("/")
-def index(): return render_template_string(PAGE)
+          .files{flex:1.4;min-height:200px}
+          .repo{flex:1;min-height:160px}
 
-@app.route("/api")
-def api_doc():
-    return jsonify({
-        "endpoints": {
-            "GET /files": "قائمة ملفات C:\\lab",
-            "GET /download?p=path": "تنزيل ملف",
-            "POST /run {cmd}": "تنفيذ أمر powershell كمدير",
-            "GET /repos?p=path": "قراءة مستودع idk",
-            "POST /repo-write {path,content,msg}": "كتابة ملف في المستودع",
-            "POST /chat {msg}": "استشارة الذكاء الاصطناعي",
-            "GET /messages": "كل الرسائل",
-            "GET /events": "SSE للرسائل الحية",
-            "POST /dispatch {workflow}": "تشغيل GitHub Action"
-        }
-    })
+          .filetree{overflow:auto;flex:1;padding-right:4px}
+          .filetree::-webkit-scrollbar,pre::-webkit-scrollbar,#chat::-webkit-scrollbar{width:6px;height:6px}
+          .filetree::-webkit-scrollbar-thumb,pre::-webkit-scrollbar-thumb,#chat::-webkit-scrollbar-thumb{background:rgba(124,92,255,0.35);border-radius:3px}
+          .filetree::-webkit-scrollbar-track,pre::-webkit-scrollbar-track,#chat::-webkit-scrollbar-track{background:transparent}
 
-@app.route("/files")
-def files():
-    out = []
-    for root, _, fs in os.walk(LAB):
-        for f in fs:
-            p = os.path.join(root, f)
-            try: out.append({"path": os.path.relpath(p, LAB), "size": os.path.getsize(p)})
-            except: pass
-    return jsonify(out)
+          .file{
+            display:flex;align-items:center;justify-content:space-between;gap:8px;
+            padding:7px 10px;border-radius:9px;margin-bottom:3px;
+            transition:background 0.15s,transform 0.15s;cursor:pointer;
+          }
+          .file:hover{background:rgba(124,92,255,0.10);transform:translateX(-2px)}
+          .file a{
+            color:var(--fg);text-decoration:none;font-family:'JetBrains Mono',monospace;
+            font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;
+            direction:ltr;text-align:left;
+          }
+          .file .ext{
+            display:inline-block;width:24px;text-align:center;font-size:13px;margin-left:6px;
+          }
+          .file .size{font-size:10.5px;color:var(--muted);white-space:nowrap;font-family:'JetBrains Mono',monospace}
+          .empty{color:var(--muted);font-size:12px;text-align:center;padding:20px;font-style:italic}
 
-@app.route("/download")
-def download():
-    p = request.args.get("p","")
-    full = os.path.abspath(os.path.join(LAB, p))
-    if not full.startswith(os.path.abspath(LAB)): return "forbidden", 403
-    return send_file(full, as_attachment=True)
+          pre{
+            font-family:'JetBrains Mono','Consolas',monospace;font-size:11.5px;
+            line-height:1.55;color:#cbd5e1;
+            background:rgba(5,7,15,0.65);border:1px solid var(--border);
+            border-radius:10px;padding:12px;overflow:auto;flex:1;margin:0;
+            direction:ltr;text-align:left;
+          }
+          pre.term{color:#86efac;background:rgba(0,10,4,0.6);border-color:rgba(74,222,128,0.2)}
+          pre.term::before{
+            content:'PS> ';color:var(--green);opacity:0.6;
+          }
 
-@app.route("/run", methods=["POST"])
-def run():
-    cmd = request.json.get("cmd","")
-    try:
-        r = subprocess.run(["powershell","-NoProfile","-Command",cmd],
-                           capture_output=True, text=True, timeout=900)
-        return jsonify(stdout=r.stdout, stderr=r.stderr, code=r.returncode)
-    except Exception as e:
-        return jsonify(stdout="", stderr=str(e), code=-1)
+          .chat{flex:1;min-height:280px}
+          #chat{
+            flex:1;overflow:auto;padding:8px 4px 8px 0;display:flex;flex-direction:column;gap:10px;
+          }
+          .msg{
+            display:flex;gap:10px;animation:fadeIn 0.3s ease both;
+          }
+          .msg.user{flex-direction:row-reverse}
+          .avatar{
+            width:32px;height:32px;border-radius:10px;flex-shrink:0;
+            display:grid;place-items:center;font-size:14px;font-weight:700;
+            border:1px solid var(--border2);
+          }
+          .msg.user .avatar{background:linear-gradient(135deg,#fbbf24,#f97316);color:#1f1300;border-color:transparent;box-shadow:0 0 16px rgba(251,191,36,0.35)}
+          .msg.assistant .avatar{background:var(--grad);color:#fff;box-shadow:0 0 16px rgba(124,92,255,0.45)}
+          .bubble{
+            max-width:78%;padding:10px 14px;border-radius:14px;font-size:13px;
+            white-space:pre-wrap;word-wrap:break-word;line-height:1.6;
+          }
+          .msg.user .bubble{background:rgba(251,191,36,0.10);border:1px solid rgba(251,191,36,0.25);color:#fef3c7}
+          .msg.assistant .bubble{background:rgba(124,92,255,0.10);border:1px solid var(--border2);color:#e0e7ff}
+          .meta{font-size:10px;color:var(--muted);margin-top:5px;font-weight:500;opacity:0.7}
 
-@app.route("/chat", methods=["POST"])
-def chat():
-    msg = request.json.get("msg","")
-    notify("user", msg)
-    listing = []
-    for root,_,fs in os.walk(LAB):
-        for f in fs: listing.append(os.path.relpath(os.path.join(root,f),LAB))
-    if AI is None:
-        reply = "[AI غير مهيأ - أضف ANTHROPIC_API_KEY في secrets]"
-    else:
-        try:
-            resp = AI.messages.create(
-                model="claude-sonnet-4-5",
-                max_tokens=8000,
-                system="You are a reverse-engineering assistant with full admin access to a Windows machine. Files are in C:\\lab. IDA Pro is installed. Use the HTTP tools to inspect files and run commands.",
-                messages=[{"role":"user","content": f"Files:\n" + "\n".join(listing) + f"\n\nTask: {msg}"}]
-            )
-            reply = resp.content[0].text
-        except Exception as e:
-            reply = f"[AI error] {e}"
-    notify("assistant", reply)
-    return jsonify(reply=reply)
+          .input-bar{display:flex;gap:8px;margin-top:12px}
+          input[type=text],input:not([type]){
+            flex:1;padding:11px 14px;border-radius:11px;
+            background:rgba(5,7,15,0.7);border:1px solid var(--border);
+            color:var(--fg);font-family:inherit;font-size:13px;transition:all 0.2s;
+          }
+          input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(124,92,255,0.15)}
+          button{
+            padding:11px 20px;border-radius:11px;border:none;cursor:pointer;
+            background:var(--grad);color:#fff;font-weight:600;font-size:13px;font-family:inherit;
+            transition:transform 0.15s,box-shadow 0.2s;
+            box-shadow:0 0 20px rgba(124,92,255,0.35);white-space:nowrap;
+          }
+          button:hover{transform:translateY(-1px);box-shadow:0 0 28px rgba(124,92,255,0.55)}
+          button:active{transform:translateY(0)}
 
-@app.route("/events")
-def events():
-    def stream():
-        q = queue.Queue()
-        subscribers.append(q)
-        try:
-            for old in messages[-50:]:
-                yield f"data: {json.dumps(old)}\n\n"
-            while True:
-                yield f"data: {json.dumps(q.get())}\n\n"
-        finally:
-            if q in subscribers: subscribers.remove(q)
-    return Response(stream(), mimetype="text/event-stream")
+          .terminal{min-height:180px;flex:1}
 
-@app.route("/messages")
-def get_messages(): return jsonify(messages)
+          .loader{display:flex;gap:4px;padding:10px}
+          .loader span{width:6px;height:6px;border-radius:50%;background:var(--accent);animation:bounce 1.2s infinite}
+          .loader span:nth-child(2){animation-delay:0.15s}
+          .loader span:nth-child(3){animation-delay:0.3s}
+          @keyframes bounce{0%,80%,100%{opacity:0.3;transform:scale(0.8)}40%{opacity:1;transform:scale(1)}}
 
-@app.route("/repos")
-def repos():
-    if not gh: return jsonify(error="no PAT")
-    repo = gh.get_repo(os.environ.get("IDK_REPO",""))
-    p = request.args.get("p","")
-    try:
-        return jsonify([{"name":c.name,"type":c.type,"path":c.path,"size":c.size} for c in repo.get_contents(p)])
-    except Exception as e:
-        return jsonify(error=str(e))
+          @media(max-width:900px){
+            .app{grid-template-columns:1fr;grid-template-areas:"header" "main" "sidebar";height:auto;overflow:auto}
+            body{overflow:auto}
+            .panel{max-height:70vh}
+          }
+          </style></head><body>
 
-@app.route("/repo-write", methods=["POST"])
-def repo_write():
-    if not gh: return jsonify(error="no PAT")
-    repo = gh.get_repo(os.environ.get("IDK_REPO",""))
-    d = request.json
-    try:
-        f = repo.get_contents(d["path"])
-        repo.update_file(d["path"], d.get("msg","update"), d["content"], f.sha)
-    except Exception:
-        repo.create_file(d["path"], d.get("msg","create"), d["content"])
-    return jsonify(ok=True)
+          <div class="app">
+            <header>
+              <div class="brand">
+                <div class="logo">R</div>
+                <div>
+                  <h1>RE Lab</h1>
+                  <div class="sub">Reverse Engineering Workspace</div>
+                </div>
+                <span class="badge">v1.0</span>
+              </div>
+              <div class="status"><span class="pulse"></span><span id="status">Live</span></div>
+            </header>
 
-@app.route("/dispatch", methods=["POST"])
-def dispatch():
-    if not gh: return jsonify(error="no PAT")
-    repo = gh.get_repo(os.environ.get("GITHUB_REPOSITORY",""))
-    wf = repo.get_workflow(request.json["workflow"])
-    wf.create_dispatch(ref=request.json.get("ref","main"))
-    return jsonify(ok=True)
+            <aside class="sidebar">
+              <section class="panel files">
+                <div class="panel-head">
+                  <h2><span class="ico">📁</span>Project Files</h2>
+                  <span class="count" id="filesCount">0</span>
+                </div>
+                <div class="filetree" id="files"><div class="loader"><span></span><span></span><span></span></div></div>
+              </section>
+              <section class="panel repo">
+                <div class="panel-head">
+                  <h2><span class="ico">📦</span>idk repo</h2>
+                </div>
+                <pre id="repo">loading...</pre>
+              </section>
+            </aside>
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8000, threaded=True)
-'@
+            <main class="main">
+              <section class="panel chat">
+                <div class="panel-head">
+                  <h2><span class="ico">💬</span>AI Chat</h2>
+                  <span class="count" id="msgCount">0 messages</span>
+                </div>
+                <div id="chat"></div>
+                <div class="input-bar">
+                  <input id="msg" placeholder="Message the AI...">
+                  <button onclick="sendMsg()">Send</button>
+                </div>
+              </section>
+
+              <section class="panel terminal">
+                <div class="panel-head">
+                  <h2><span class="ico">⚙️</span>Terminal • Admin</h2>
+                  <span class="count">powershell</span>
+                </div>
+                <div class="input-bar" style="margin:0 0 12px">
+                  <input id="cmd" placeholder="dir C:\lab">
+                  <button onclick="runCmd()">Run</button>
+                </div>
+                <pre class="term" id="out">Ready.</pre>
+              </section>
+            </main>
+          </div>
+
+          <script>
+          function extIcon(name){
+            const n = name.toLowerCase();
+            if(n.endsWith('.i64')||n.endsWith('.idb')) return '🧩';
+            if(n.endsWith('.so')||n.endsWith('.dll')) return '⚙️';
+            if(n.endsWith('.exe')) return '🚀';
+            if(n.endsWith('.txt')||n.endsWith('.md')) return '📄';
+            if(n.endsWith('.json')) return '🧾';
+            if(n.endsWith('.py')||n.endsWith('.js')) return '🐍';
+            if(n.endsWith('.zip')||n.endsWith('.rar')||n.endsWith('.7z')) return '📦';
+            if(n.endsWith('.png')||n.endsWith('.jpg')) return '🖼️';
+            return '📎';
+          }
+          function fmt(b){
+            if(b<1024) return b+' B';
+            if(b<1048576) return (b/1024).toFixed(1)+' KB';
+            if(b<1073741824) return (b/1048576).toFixed(1)+' MB';
+            return (b/1073741824).toFixed(2)+' GB';
+          }
+          async function loadFiles(){
+            try{
+              const r = await fetch('/files'); const j = await r.json();
+              document.getElementById('filesCount').textContent = j.length;
+              if(!j.length){document.getElementById('files').innerHTML='<div class="empty">No files yet.</div>';return}
+              j.sort((a,b)=>a.path.localeCompare(b.path));
+              document.getElementById('files').innerHTML = j.map(f=>{
+                const parts = f.path.split(/[\\\/]/);
+                const base = parts[parts.length-1];
+                return '<div class="file"><span class="ext">'+extIcon(base)+'</span><a href="/download?p='+encodeURIComponent(f.path)+'">'+f.path+'</a><span class="size">'+fmt(f.size)+'</span></div>';
+              }).join('');
+            }catch(e){document.getElementById('files').innerHTML='<div class="empty">error: '+e+'</div>'}
+          }
+          async function loadRepo(){
+            try{
+              const r = await fetch('/repos'); const j = await r.json();
+              document.getElementById('repo').textContent = JSON.stringify(j,null,2);
+            }catch(e){document.getElementById('repo').textContent = 'error: '+e}
+          }
+          async function runCmd(){
+            const c = document.getElementById('cmd').value;
+            if(!c) return;
+            const out = document.getElementById('out');
+            out.textContent = '$ '+c+'\n...';
+            const r = await fetch('/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cmd:c})});
+            const j = await r.json();
+            out.textContent = '$ '+c+'\n\n'+(j.stdout||'')+(j.stderr?'\n[stderr]\n'+j.stderr:'');
+            out.scrollTop = out.scrollHeight;
+          }
+          async function sendMsg(){
+            const i = document.getElementById('msg');
+            const m = i.value.trim();
+            if(!m) return;
+            i.value = '';
+            await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({msg:m})});
+          }
+          function addMsg(d){
+            const c = document.getElementById('chat');
+            const wrap = document.createElement('div');
+            wrap.className = 'msg '+d.role;
+            const ico = d.role==='user' ? '👤' : '🤖';
+            const who = d.role==='user' ? 'You' : 'AI';
+            const time = new Date(d.ts*1000).toLocaleTimeString();
+            const text = (d.text||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+            wrap.innerHTML = '<div class="avatar">'+ico+'</div><div><div class="bubble">'+text+'</div><div class="meta">'+who+' • '+time+'</div></div>';
+            c.appendChild(wrap);
+            c.scrollTop = c.scrollHeight;
+            document.getElementById('msgCount').textContent = c.children.length+' messages';
+          }
+          const es = new EventSource('/events');
+          es.onmessage = e => addMsg(JSON.parse(e.data));
+          es.onerror = () => { document.getElementById('status').textContent = 'reconnecting...'; };
+          document.getElementById('msg').addEventListener('keydown',e=>{if(e.key==='Enter')sendMsg()});
+          document.getElementById('cmd').addEventListener('keydown',e=>{if(e.key==='Enter')runCmd()});
+          loadFiles(); loadRepo();
+          setInterval(loadFiles,30000);
+          setInterval(loadRepo,60000);
+          </script></body></html>
+          """
+
+          @app.route("/")
+          def index(): return render_template_string(PAGE)
+
+          @app.route("/files")
+          def files():
+              out=[]
+              for root,_,fs in os.walk(LAB):
+                  for f in fs:
+                      p=os.path.join(root,f)
+                      try: out.append({"path":os.path.relpath(p,LAB),"size":os.path.getsize(p)})
+                      except: pass
+              return jsonify(out)
+
+          @app.route("/download")
+          def download():
+              p=request.args.get("p","")
+              full=os.path.abspath(os.path.join(LAB,p))
+              if not full.startswith(os.path.abspath(LAB)): return "forbidden",403
+              return send_file(full,as_attachment=True)
+
+          @app.route("/run",methods=["POST"])
+          def run():
+              cmd=request.json.get("cmd","")
+              try:
+                  r=subprocess.run(["powershell","-NoProfile","-Command",cmd],capture_output=True,text=True,timeout=900)
+                  return jsonify(stdout=r.stdout,stderr=r.stderr,code=r.returncode)
+              except Exception as e:
+                  return jsonify(stdout="",stderr=str(e),code=-1)
+
+          @app.route("/chat",methods=["POST"])
+          def chat():
+              msg=request.json.get("msg","")
+              notify("user",msg)
+              listing=[]
+              for root,_,fs in os.walk(LAB):
+                  for f in fs: listing.append(os.path.relpath(os.path.join(root,f),LAB))
+              if AI is None:
+                  reply="[AI not configured - add ANTHROPIC_API_KEY secret]"
+              else:
+                  try:
+                      resp=AI.messages.create(model="claude-sonnet-4-5",max_tokens=8000,
+                          system="You are a reverse-engineering assistant with full admin access to a Windows machine. Files are in C:\\lab. IDA Pro is installed. Use the HTTP endpoints to inspect files and run commands.",
+                          messages=[{"role":"user","content":"Files:\n"+"\n".join(listing)+"\n\nTask: "+msg}])
+                      reply=resp.content[0].text
+                  except Exception as e:
+                      reply="[AI error] "+str(e)
+              notify("assistant",reply)
+              return jsonify(reply=reply)
+
+          @app.route("/events")
+          def events():
+              def stream():
+                  q=queue.Queue()
+                  subscribers.append(q)
+                  try:
+                      for old in messages[-50:]: yield "data: "+json.dumps(old)+"\n\n"
+                      while True: yield "data: "+json.dumps(q.get())+"\n\n"
+                  finally:
+                      if q in subscribers: subscribers.remove(q)
+              return Response(stream(),mimetype="text/event-stream")
+
+          @app.route("/messages")
+          def get_messages(): return jsonify(messages)
+
+          @app.route("/repos")
+          def repos():
+              if not gh: return jsonify(error="no PAT")
+              repo=gh.get_repo(os.environ.get("IDK_REPO",""))
+              p=request.args.get("p","")
+              try:
+                  return jsonify([{"name":c.name,"type":c.type,"path":c.path,"size":c.size} for c in repo.get_contents(p)])
+              except Exception as e:
+                  return jsonify(error=str(e))
+
+          @app.route("/repo-write",methods=["POST"])
+          def repo_write():
+              if not gh: return jsonify(error="no PAT")
+              repo=gh.get_repo(os.environ.get("IDK_REPO",""))
+              d=request.json
+              try:
+                  f=repo.get_contents(d["path"])
+                  repo.update_file(d["path"],d.get("msg","update"),d["content"],f.sha)
+              except Exception:
+                  repo.create_file(d["path"],d.get("msg","create"),d["content"])
+              return jsonify(ok=True)
+
+          @app.route("/dispatch",methods=["POST"])
+          def dispatch():
+              if not gh: return jsonify(error="no PAT")
+              repo=gh.get_repo(os.environ.get("GITHUB_REPOSITORY",""))
+              wf=repo.get_workflow(request.json["workflow"])
+              wf.create_dispatch(ref=request.json.get("ref","main"))
+              return jsonify(ok=True)
+
+          if __name__=="__main__":
+              app.run(host="0.0.0.0",port=8000,threaded=True)
+          '@
           Set-Content -Path C:\server.py -Value $py -Encoding UTF8
 
       - name: Start server + tunnel
@@ -335,7 +546,7 @@ if __name__ == "__main__":
           Start-Sleep -Seconds 20100
           $body = @{ ref = "main" } | ConvertTo-Json
           Invoke-RestMethod -Method Post `
-            -Uri "https://api.github.com/repos/${{ github.repository }}/actions/workflows/lab.yml/dispatches" `
+            -Uri "https://api.github.com/repos/${{ github.repository }}/actions/workflows/Ailab.yml/dispatches" `
             -Headers @{ Authorization = "Bearer ${{ secrets.GH_PAT }}"; Accept = "application/vnd.github+json" } `
             -Body $body -ContentType "application/json"
 
